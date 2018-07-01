@@ -24,6 +24,8 @@ import (
 	"github.com/xitongsys/parquet-go/ParquetFile"
 	"github.com/xitongsys/parquet-go/ParquetWriter"
 	"github.com/xitongsys/parquet-go/SchemaHandler"
+
+	"github.com/andyfase/CURDashboard/go/curgroups"
 )
 
 const DecimalScale string = "10"
@@ -35,8 +37,6 @@ type CurColumn struct {
 	Type string
 }
 
-//
-// CurConvert class and functions
 type CurConvert struct {
 	sourceBucket string
 	sourceObject string
@@ -59,6 +59,23 @@ type CurConvert struct {
 	CurParqetFiles map[string]bool
 	CurColumnTypes map[string]string
 	skipCols       map[int]bool
+
+	curGroups []curgroups.CurGroup
+}
+
+type matchAny struct {
+	all []map[string]string `toml:"all"`
+}
+
+type cgMatch struct {
+	any []matchAny `toml:"any"`
+}
+
+type curGroup struct {
+	name        string    `toml:"name"`
+	pathSuffix  string    `toml:"pathSuffix"`
+	tablePrefix string    `toml:"tablePrefix"`
+	match       []cgMatch `toml:"match"`
 }
 
 //
@@ -94,6 +111,14 @@ func NewCurConvert(sBucket string, sObject string, dBucket string, dObject strin
 	cur.CurParqetFiles = make(map[string]bool)
 
 	return cur
+}
+
+//
+//
+func (c *CurConvert) SetCurGroups(curGroups ...curgroups.CurGroup) {
+	for _, group := range curGroups {
+		c.curGroups = append(c.curGroups, group)
+	}
 }
 
 //
@@ -470,10 +495,19 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 	}
 
 	// create local parquet file
-	localParquetFile := c.tempDir + "/" + inputFile[strings.LastIndex(inputFile, "/")+1:strings.Index(inputFile, ".")] + ".parquet"
+	outputFile := inputFile[strings.LastIndex(inputFile, "/")+1:strings.Index(inputFile, ".")] + ".parquet"
+	localParquetFile := c.tempDir + "/" + outputFile
 	f, err := ParquetFile.NewLocalFileWriter(localParquetFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to create parquet file %s, error: %s", localParquetFile, err.Error())
+	}
+
+	// create any required curGroup parquet files
+	for i := range c.curGroups {
+		localGroupParquetFile := c.tempDir + "/" + c.curGroups[i].Name + "_" + outputFile
+		if err := c.curGroups[i].CreateParquetWriter(localGroupParquetFile, c.CurColumns, c.CurColumnPos, c.concurrency); err != nil {
+			return "", fmt.Errorf("failed to create curGroup writer %s, error: %s", localGroupParquetFile, err.Error())
+		}
 	}
 
 	// init Parquet writer
@@ -506,6 +540,9 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 			}
 		}
 		ph.WriteString(recParquet)
+		for i := range c.curGroups {
+			c.curGroups[i].Writer <- recParquet
+		}
 		i++
 	}
 
@@ -514,6 +551,11 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 	}
 	ph.WriteStop()
 	f.Close()
+
+	// close any required curGroup parquet files
+	for i := range c.curGroups {
+		c.curGroups[i].CloseParquetWriter()
+	}
 
 	return localParquetFile, nil
 }
@@ -580,25 +622,34 @@ func (c *CurConvert) uploadEncryptedCUR(destObject string, file io.ReadSeeker) e
 // UploadCur -
 func (c *CurConvert) UploadCur(parquetFile string) error {
 
-	destObject := c.destObject + "/" + parquetFile[strings.LastIndex(parquetFile, "/")+1:]
-
-	file, err := os.Open(parquetFile)
-	if err != nil {
-		return err
+	files := make(map[string]string)
+	for i := range c.curGroups {
+		localFile, destPathPrefix := c.curGroups[i].GetUploadData()
+		files[localFile] = destPathPrefix
 	}
-	defer file.Close()
+	files[parquetFile] = "main"
 
-	if len(c.destKMSKey) > 0 {
-		if err := c.uploadEncryptedCUR(destObject, file); err != nil {
+	for file, prefix := range files {
+		destObject := c.destObject + "/" + prefix + "/" + file[strings.LastIndex(file, "/")+1:]
+
+		f, err := os.Open(file)
+		if err != nil {
 			return err
 		}
-	} else {
-		if err := c.uploadCUR(destObject, file); err != nil {
-			return err
+
+		if len(c.destKMSKey) > 0 {
+			if err := c.uploadEncryptedCUR(destObject, f); err != nil {
+				return err
+			}
+		} else {
+			if err := c.uploadCUR(destObject, f); err != nil {
+				return err
+			}
 		}
+		f.Close()
+		c.CurParqetFiles[destObject] = true
 	}
 
-	c.CurParqetFiles[destObject] = true
 	return nil
 }
 
@@ -651,7 +702,6 @@ func (c *CurConvert) CleanCur() error {
 //
 // ConvertCur - Performs Download, Conversion
 func (c *CurConvert) ConvertCur() error {
-
 	if err := c.ParseCur(); err != nil {
 		return fmt.Errorf("Error Parsing CUR Manifest: %s", err.Error())
 	}
@@ -681,6 +731,10 @@ func (c *CurConvert) ConvertCur() error {
 
 			os.Remove(gzipFile)
 			os.Remove(parquetFile)
+			for i := range c.curGroups {
+				file, _ := c.curGroups[i].GetUploadData()
+				os.Remove(file)
+			}
 			<-limit
 			result <- nil
 		}(c.CurFiles[reportKey])

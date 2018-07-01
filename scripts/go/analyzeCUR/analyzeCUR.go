@@ -16,6 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/andyfase/CURDashboard/go/curconvert"
+	"github.com/andyfase/CURDashboard/go/curgroups"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -27,9 +28,6 @@ import (
 	"github.com/jcxplorer/cwlogger"
 )
 
-/*
-Structs Below are used to contain configuration parsed in
-*/
 type General struct {
 	Namespace string
 }
@@ -66,10 +64,6 @@ type Athena struct {
 	DbName      string `toml:"database_name"`
 }
 
-type AthenaResponse struct {
-	Rows []map[string]string
-}
-
 type MetricConfig struct {
 	Substring map[string]string
 }
@@ -80,11 +74,12 @@ type Config struct {
 	Athena       Athena
 	MetricConfig MetricConfig
 	Metrics      []Metric
+	CurGroups    []curgroups.CurGroup
 }
 
-/*
-End of configuraton structs
-*/
+type AthenaResponse struct {
+	Rows []map[string]string
+}
 
 var defaultConfigPath = "./scripts/analyzeCUR.config"
 var maxConcurrentQueries = 5
@@ -585,7 +580,7 @@ func riUtilization(sess *session.Session, svcAthena *athena.Athena, conf Config,
 	return nil
 }
 
-func processCUR(sourceBucket string, reportName string, reportPath string, destPath string, destBucket string, logger *cwlogger.Logger, dateOverride string) ([]curconvert.CurColumn, string, string, error) {
+func processCUR(sourceBucket string, reportName string, reportPath string, destPath string, destBucket string, logger *cwlogger.Logger, dateOverride string, curGroups []curgroups.CurGroup) ([]curconvert.CurColumn, string, string, error) {
 
 	var t1 time.Time
 	var err error
@@ -642,6 +637,11 @@ func processCUR(sourceBucket string, reportName string, reportPath string, destP
 			destPathFull = destPath + "/" + destPathDate
 		}
 		cc.SetDestPath(destPathFull)
+	}
+
+	// If CurGroups exists set them
+	if len(curGroups) > 0 {
+		cc.SetCurGroups(curGroups...)
 	}
 
 	// Convert CUR
@@ -724,7 +724,7 @@ func main() {
 	}
 
 	// convert CUR
-	columns, s3Path, curDate, err := processCUR(sourceBucket, curReportName, curReportPath, curDestPath, destBucket, logger, dateOverride)
+	columns, s3Path, curDate, err := processCUR(sourceBucket, curReportName, curReportPath, curDestPath, destBucket, logger, dateOverride, conf.CurGroups)
 	if err != nil {
 		doLog(logger, err.Error())
 	}
@@ -738,9 +738,23 @@ func main() {
 		doLog(logger, "Could not create Athena Database: "+err.Error())
 	}
 
-	// make sure current Athena table exists
-	if err := createAthenaTable(svcAthena, conf.Athena.DbName, conf.Athena.TablePrefix, conf.Athena.TableSQL, columns, s3Path, curDate, meta["region"].(string), account); err != nil {
-		doLog(logger, "Could not create Athena Table: "+err.Error())
+	// make sure current Athena tables exists
+	tables := make(map[string]string)
+	tables[""] = "main"
+	for i := range conf.CurGroups {
+		tables[conf.CurGroups[i].TablePrefix] = conf.CurGroups[i].TablePrefix
+	}
+
+	for tablePrefix, pathPrefix := range tables {
+		table := conf.Athena.TablePrefix
+		if len(tablePrefix) > 0 {
+			table += "_" + tablePrefix
+		}
+		s3Path := s3Path + "/" + pathPrefix
+
+		if err := createAthenaTable(svcAthena, conf.Athena.DbName, table, conf.Athena.TableSQL, columns, s3Path, curDate, meta["region"].(string), account); err != nil {
+			doLog(logger, "Could not create Athena Table: "+err.Error())
+		}
 	}
 
 	// // If RI analysis enabled - do it
