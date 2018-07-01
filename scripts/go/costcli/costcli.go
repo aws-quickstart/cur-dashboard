@@ -40,6 +40,7 @@ type Config struct {
 	TagBlacklist map[string][]string `json:"tagblacklist"`
 	Sql          map[string]string   `json:"sql"`
 	Tags         string
+	TagsGroup    string
 	Database     string
 	Table        string
 	Account      string
@@ -53,6 +54,8 @@ type Results struct {
 	tagCosts map[string]float64
 	total    float64
 }
+
+var RegexCache map[string]*regexp.Regexp
 
 func substituteParams(sql string, params map[string]string) string {
 
@@ -114,7 +117,6 @@ Function takes SQL to send to Athena converts into JSON to send to Athena HTTP p
 Then recieves responses in JSON which is converted back into a struct and returned
 */
 func sendQuery(svc *athena.Athena, db string, sql string, account string, region string, s3ResultsLocation string) (AthenaResponse, error) {
-
 	var results AthenaResponse
 	var s athena.StartQueryExecutionInput
 	s.SetQueryString(sql)
@@ -159,11 +161,14 @@ func sendQuery(svc *athena.Athena, db string, sql string, account string, region
 
 	var ip athena.GetQueryResultsInput
 	ip.SetQueryExecutionId(*result.QueryExecutionId)
+	ip.SetMaxResults(1000)
 
 	// loop through results (paginated call)
 	var colNames []string
+	i := 1
 	err = svc.GetQueryResultsPages(&ip,
 		func(page *athena.GetQueryResultsOutput, lastPage bool) bool {
+			i++
 			for row := range page.ResultSet.Rows {
 				if len(colNames) < 1 { // first row contains column names - which we use in any subsequent rows to produce map[columnname]values
 					for j := range page.ResultSet.Rows[row].Data {
@@ -208,11 +213,21 @@ func findExact(value string, list []string) bool {
 }
 
 func findRegex(value string, list []string) bool {
+
+	if RegexCache == nil {
+		RegexCache = make(map[string]*regexp.Regexp)
+	}
+
 	for _, v := range list {
-		r, err := regexp.Compile(v)
-		if err != nil {
-			fmt.Println("Regex: " + v + ", invalid - skipping")
-			continue
+		r, ok := RegexCache[v]
+		if !ok {
+			var err error
+			r, err = regexp.Compile(v)
+			if err != nil {
+				fmt.Println("Regex: " + v + ", invalid - skipping")
+				continue
+			}
+			RegexCache[v] = r
 		}
 		if r.MatchString(value) {
 			return true
@@ -301,7 +316,7 @@ func processRIUsage(conf Config, svcAthena *athena.Athena, region string, s3Resu
 
 	// RI Usage Per tag
 	var riUsage AthenaResponse
-	sql = substituteParams(conf.Sql["riusage"], map[string]string{"**TAGS**": conf.Tags, "**DB**": conf.Database, "**TABLE**": conf.Table})
+	sql = substituteParams(conf.Sql["riusage"], map[string]string{"**TAGS**": conf.Tags, "**TAGSGROUP**": conf.TagsGroup, "**DB**": conf.Database, "**TABLE**": conf.Table})
 	riUsage, err = sendQuery(svcAthena, conf.Database, sql, conf.Account, region, s3ResultsLocation)
 	if err != nil {
 		return tagCost, err
@@ -361,6 +376,23 @@ func printResults(r Results, c Config) {
 	}
 	fmt.Println("---------------------")
 	fmt.Printf("Total: %.2f", math.Round(r.total/0.01)*0.01)
+}
+
+func addTagCase(tag string, blacklist map[string][]string, appendTagName bool) string {
+
+	if _, ok := blacklist[tag]; !ok {
+		return "\"" + tag + "\""
+	}
+
+	sql := "CASE "
+	for i := range blacklist[tag] {
+		sql += "WHEN regexp_like(\"" + tag + "\", '" + blacklist[tag][i] + "*') THEN '' "
+	}
+	sql += "ELSE \"" + tag + "\" END"
+	if appendTagName {
+		sql += " as \"" + tag + "\""
+	}
+	return sql
 }
 
 func main() {
@@ -477,14 +509,20 @@ func main() {
 
 				for _, tm := range conf.TagMap {
 					for i := range tm.Tags {
-						conf.Tags += "\"" + tm.Tags[i] + "\","
+						conf.Tags += addTagCase(tm.Tags[i], conf.TagBlacklist, true) + ","
+						conf.TagsGroup += addTagCase(tm.Tags[i], conf.TagBlacklist, false) + ","
 					}
 				}
 				conf.Tags = conf.Tags[:len(conf.Tags)-1]
+				conf.TagsGroup = conf.TagsGroup[:len(conf.TagsGroup)-1]
 
 				// Normal Cost per tag
 				svcAthena := athena.New(sess)
-				sql := substituteParams(conf.Sql["tagmap"], map[string]string{"**TAGS**": conf.Tags, "**DB**": conf.Database, "**TABLE**": conf.Table})
+				sql := conf.Sql["tagmap"]
+				if riUsage {
+					sql = conf.Sql["tagmapri"]
+				}
+				sql = substituteParams(sql, map[string]string{"**TAGS**": conf.Tags, "**TAGSGROUP**": conf.TagsGroup, "**DB**": conf.Database, "**TABLE**": conf.Table})
 				tagCost, err := sendQuery(svcAthena, conf.Database, sql, conf.Account, region, s3ResultsLocation)
 				if err != nil {
 					return err
