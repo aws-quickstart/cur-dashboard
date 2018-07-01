@@ -25,7 +25,7 @@ import (
 	"github.com/xitongsys/parquet-go/ParquetWriter"
 	"github.com/xitongsys/parquet-go/SchemaHandler"
 
-	"github.com/andyfase/CURDashboard/go/curgroups"
+	"github.com/aws-quickstart/cur-dashboard/scripts/go/curgroups"
 )
 
 const DecimalScale string = "10"

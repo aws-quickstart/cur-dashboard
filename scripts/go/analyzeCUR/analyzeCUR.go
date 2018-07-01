@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/andyfase/CURDashboard/go/curconvert"
-	"github.com/andyfase/CURDashboard/go/curgroups"
+	"github.com/aws-quickstart/cur-dashboard/scripts/go/curconvert"
+	"github.com/aws-quickstart/cur-dashboard/scripts/go/curgroups"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
