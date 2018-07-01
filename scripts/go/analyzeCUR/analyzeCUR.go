@@ -660,7 +660,13 @@ func createAthenaTable(svcAthena *athena.Athena, dbName string, tablePrefix stri
 
 	var cols string
 	for col := range columns {
-		cols += "`" + columns[col].Name + "` " + columns[col].Type + ",\n"
+		var t string
+		if columns[col].Type == "DECIMAL" {
+			t = columns[col].Type + "(" + curconvert.DecimalPrecision + "," + curconvert.DecimalScale + ")"
+		} else {
+			t = columns[col].Type
+		}
+		cols += "`" + columns[col].Name + "` " + t + ",\n"
 	}
 	cols = cols[:strings.LastIndex(cols, ",")]
 	sql = substituteParams(sql, map[string]string{"**DBNAME**": dbName, "**PREFIX**": tablePrefix, "**DATE**": date, "**COLUMNS**": cols, "**S3**": s3Path})

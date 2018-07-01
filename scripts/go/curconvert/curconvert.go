@@ -26,6 +26,9 @@ import (
 	"github.com/xitongsys/parquet-go/SchemaHandler"
 )
 
+const DecimalScale string = "10"
+const DecimalPrecision string = "30"
+
 //
 type CurColumn struct {
 	Name string
@@ -51,6 +54,7 @@ type CurConvert struct {
 	fileConcurrency int
 
 	CurColumns     []string
+	CurColumnPos   map[string]int
 	CurFiles       []string
 	CurParqetFiles map[string]bool
 	CurColumnTypes map[string]string
@@ -349,6 +353,7 @@ func (c *CurConvert) ParseCur() error {
 	cols := j["columns"].([]interface{})
 	seen := make(map[string]bool)
 	c.skipCols = make(map[int]bool)
+	c.CurColumnPos = make(map[string]int)
 	i := -1
 	for column := range cols {
 		i++
@@ -382,7 +387,16 @@ func (c *CurConvert) ParseCur() error {
 			colType = "UTF8"
 		}
 
-		c.CurColumns = append(c.CurColumns, "name="+columnName+", type="+colType+", encoding=PLAIN_DICTIONARY")
+		if colType == "DECIMAL" {
+			colType += ", scale=" + DecimalScale + ", precision=" + DecimalPrecision + ", basetype=FIXED_LEN_BYTE_ARRAY"
+		}
+
+		encoding := ""
+		if colType == "UTF8" {
+			encoding = ", encoding=PLAIN_DICTIONARY"
+		}
+		c.CurColumns = append(c.CurColumns, "name="+columnName+", type="+colType+encoding)
+		c.CurColumnPos[columnName] = i
 		seen[columnName] = true
 	}
 
