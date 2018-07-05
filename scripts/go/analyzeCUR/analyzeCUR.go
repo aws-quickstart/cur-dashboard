@@ -742,7 +742,7 @@ func main() {
 	tables := make(map[string]string)
 	tables[""] = "main"
 	for i := range conf.CurGroups {
-		tables[conf.CurGroups[i].TablePrefix] = conf.CurGroups[i].TablePrefix
+		tables[conf.CurGroups[i].TablePrefix] = conf.CurGroups[i].PathSuffix
 	}
 
 	for tablePrefix, pathPrefix := range tables {
