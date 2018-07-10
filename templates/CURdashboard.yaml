@@ -251,8 +251,6 @@ Resources:
                   - "arn:aws:s3:::aws-athena-query-results-*"
               - Effect: Allow
                 Action:
-                  - s3:GetBucketLocation
-                  - s3:ListBucket
                   - s3:GetObject
                   - s3:ListObjects
                 Resource:
@@ -271,6 +269,16 @@ Resources:
                   - !Sub
                       - 'arn:aws:s3:::${DerivedBucket}/parquet-cur'
                       - {DerivedBucket: !If [NoUploadBucket, !Ref CURBucket, !Ref CURUploadBucket]}
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CURBucket}'
+                  - !If
+                    - NoUploadBucket
+                    - !Ref "AWS::NoValue"
+                    - !Sub 'arn:aws:s3:::${CURUploadBucket}'
               - Effect: Allow
                 Action:
                   - s3:GetObject
