@@ -653,7 +653,7 @@ func processCUR(sourceBucket string, reportName string, reportPath string, destP
 	if err != nil {
 		return nil, "", "", errors.New("Could not obtain CUR columns: " + err.Error())
 	}
-	return cols, "s3://" + destBucket + "/" + destPathFull + "/", destPathDate, nil
+	return cols, "s3://" + destBucket + "/" + destPathFull, destPathDate, nil
 }
 
 func createAthenaTable(svcAthena *athena.Athena, dbName string, tablePrefix string, sql string, columns []curconvert.CurColumn, s3Path string, date string, region string, account string) error {

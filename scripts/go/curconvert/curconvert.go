@@ -26,6 +26,7 @@ import (
 	"github.com/xitongsys/parquet-go/SchemaHandler"
 
 	"github.com/aws-quickstart/cur-dashboard/scripts/go/curgroups"
+	"github.com/mohae/deepcopy"
 )
 
 const DecimalScale string = "10"
@@ -469,12 +470,15 @@ func (c *CurConvert) DownloadCur(curObject string) (string, error) {
 
 //
 // ParquetCur -
-func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
+func (c *CurConvert) ParquetCur(inputFile string) (string, []curgroups.CurGroup, error) {
+
+	// deep copy CurGroups
+	groups := deepcopy.Copy(c.curGroups).([]curgroups.CurGroup)
 
 	// open input
 	file, err := os.Open(inputFile)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer file.Close()
 
@@ -499,21 +503,21 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 	localParquetFile := c.tempDir + "/" + outputFile
 	f, err := ParquetFile.NewLocalFileWriter(localParquetFile)
 	if err != nil {
-		return "", fmt.Errorf("failed to create parquet file %s, error: %s", localParquetFile, err.Error())
+		return "", nil, fmt.Errorf("failed to create parquet file %s, error: %s", localParquetFile, err.Error())
 	}
 
 	// create any required curGroup parquet files
-	for i := range c.curGroups {
-		localGroupParquetFile := c.tempDir + "/" + c.curGroups[i].Name + "_" + outputFile
-		if err := c.curGroups[i].CreateParquetWriter(localGroupParquetFile, c.CurColumns, c.CurColumnPos, c.concurrency); err != nil {
-			return "", fmt.Errorf("failed to create curGroup writer %s, error: %s", localGroupParquetFile, err.Error())
+	for j := range c.curGroups {
+		localGroupParquetFile := c.tempDir + "/" + groups[j].Name + "_" + outputFile
+		if err := groups[j].CreateParquetWriter(localGroupParquetFile, c.CurColumns, c.CurColumnPos, c.concurrency); err != nil {
+			return "", nil, fmt.Errorf("failed to create curGroup writer %s, error: %s", localGroupParquetFile, err.Error())
 		}
 	}
 
 	// init Parquet writer
 	ph, err := ParquetWriter.NewCSVWriter(c.CurColumns, f, int64(c.concurrency))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	// read all remaining records of CSV file and write to parquet
@@ -529,7 +533,7 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 			break
 		}
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 
 		var recParquet []*string
@@ -540,8 +544,8 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 			}
 		}
 		ph.WriteString(recParquet)
-		for i := range c.curGroups {
-			c.curGroups[i].Writer <- recParquet
+		for j := range groups {
+			groups[j].Writer <- recParquet
 		}
 		i++
 	}
@@ -552,12 +556,12 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, error) {
 	ph.WriteStop()
 	f.Close()
 
-	// close any required curGroup parquet files
-	for i := range c.curGroups {
-		c.curGroups[i].CloseParquetWriter()
+	// close any required curGroup parquet files and add to upload map
+	for j := range groups {
+		groups[j].CloseParquetWriter()
 	}
 
-	return localParquetFile, nil
+	return localParquetFile, groups, nil
 }
 
 func (c *CurConvert) uploadCUR(destObject string, file io.Reader) error {
@@ -620,11 +624,11 @@ func (c *CurConvert) uploadEncryptedCUR(destObject string, file io.ReadSeeker) e
 
 //
 // UploadCur -
-func (c *CurConvert) UploadCur(parquetFile string) error {
+func (c *CurConvert) UploadCur(parquetFile string, groups []curgroups.CurGroup) error {
 
 	files := make(map[string]string)
-	for i := range c.curGroups {
-		localFile, destPathPrefix := c.curGroups[i].GetUploadData()
+	for i := range groups {
+		localFile, destPathPrefix := groups[i].GetUploadData()
 		files[localFile] = destPathPrefix
 	}
 	files[parquetFile] = "main"
@@ -718,13 +722,13 @@ func (c *CurConvert) ConvertCur() error {
 				return
 			}
 
-			parquetFile, err := c.ParquetCur(gzipFile)
+			parquetFile, groups, err := c.ParquetCur(gzipFile)
 			if err != nil {
 				result <- fmt.Errorf("Error Converting CUR: %s", err.Error())
 				return
 			}
 
-			if err := c.UploadCur(parquetFile); err != nil {
+			if err := c.UploadCur(parquetFile, groups); err != nil {
 				result <- fmt.Errorf("Error Uploading CUR: %s", err.Error())
 				return
 			}
