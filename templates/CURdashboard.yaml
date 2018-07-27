@@ -235,6 +235,7 @@ Resources:
                   - glue:CreateTable
                   - glue:GetDatabase
                   - glue:GetTable
+                  - glue:UpdateTable
                 Resource:
                   - "*"
               - Effect: Allow

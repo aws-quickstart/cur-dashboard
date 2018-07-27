@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/athena"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go/service/glue"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/jcxplorer/cwlogger"
@@ -659,6 +660,59 @@ func processCUR(sourceBucket string, reportName string, reportPath string, destP
 	return cols, "s3://" + destBucket + "/" + destPathFull, destPathDate, nil
 }
 
+func createUpdateAthenaTable(sess *session.Session, svcAthena *athena.Athena, c Config, columns []curconvert.CurColumn, s3path string, date string, region string, account string) error {
+	svcGlue := glue.New(sess)
+	table := c.Athena.TablePrefix + "_" + date
+
+	// if Table exists and if so update it - otherwise create it
+	resp, err := svcGlue.GetTable(&glue.GetTableInput{
+		DatabaseName: aws.String(c.Athena.DbName),
+		Name:         aws.String(table)})
+
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok {
+			if awsErr.Code() == glue.ErrCodeEntityNotFoundException {
+				// Table doesnt exist create it
+				if err = createAthenaTable(svcAthena, c.Athena.DbName, c.Athena.TablePrefix, c.Athena.TableSQL, columns, s3path, date, region, account); err != nil {
+					return errors.New("Failed to create new table, error: " + err.Error())
+				}
+				return nil
+			}
+			return errors.New("Failed to check existing table, error: " + awsErr.Message())
+		}
+		return errors.New("Failed to check existing table, error: " + err.Error())
+	}
+
+	var cols []*glue.Column
+	for col := range columns {
+		col := &glue.Column{
+			Name: aws.String(columns[col].Name),
+			Type: aws.String(strings.ToLower(columns[col].Type))}
+		cols = append(cols, col)
+	}
+
+	storageDesc := resp.Table.StorageDescriptor
+	storageDesc.SetColumns(cols)
+
+	// update column info in existing table
+	updateTableInput := &glue.UpdateTableInput{
+		DatabaseName: aws.String(c.Athena.DbName),
+		TableInput: &glue.TableInput{
+			Name:              aws.String(table),
+			Description:       resp.Table.Description,
+			Owner:             resp.Table.Owner,
+			Parameters:        resp.Table.Parameters,
+			PartitionKeys:     resp.Table.PartitionKeys,
+			Retention:         resp.Table.Retention,
+			TableType:         resp.Table.TableType,
+			StorageDescriptor: storageDesc}}
+
+	if _, err := svcGlue.UpdateTable(updateTableInput); err != nil {
+		return errors.New("Error updating table column info, error: " + err.Error())
+	}
+	return nil
+}
+
 func createAthenaTable(svcAthena *athena.Athena, dbName string, tablePrefix string, sql string, columns []curconvert.CurColumn, s3Path string, date string, region string, account string) error {
 
 	var cols string
@@ -755,7 +809,7 @@ func main() {
 		}
 		s3Path := s3Path + "/" + pathPrefix
 
-		if err := createAthenaTable(svcAthena, conf.Athena.DbName, table, conf.Athena.TableSQL, columns, s3Path, curDate, meta["region"].(string), account); err != nil {
+		if err := createUpdateAthenaTable(sess, svcAthena, conf, columns, s3Path, curDate, meta["region"].(string), account); err != nil {
 			doLog(logger, "Could not create Athena Table: "+err.Error())
 		}
 	}
