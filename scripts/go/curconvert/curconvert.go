@@ -1,6 +1,7 @@
 package curconvert
 
 import (
+	"archive/zip"
 	"compress/gzip"
 	"encoding/csv"
 	"encoding/json"
@@ -53,6 +54,7 @@ type CurConvert struct {
 	tempDir         string
 	concurrency     int
 	fileConcurrency int
+	compression     string
 
 	CurColumns     []string
 	CurColumnPos   map[string]int
@@ -375,6 +377,9 @@ func (c *CurConvert) ParseCur() error {
 		return fmt.Errorf("failed to parse manifest, bucket: %s, object: %s, error: %s", c.sourceBucket, c.sourceObject, err.Error())
 	}
 
+	// store compression type
+	c.compression = j["compression"].(string)
+
 	// Store all column names from manifests
 	cols := j["columns"].([]interface{})
 	seen := make(map[string]bool)
@@ -482,12 +487,36 @@ func (c *CurConvert) ParquetCur(inputFile string) (string, []curgroups.CurGroup,
 	}
 	defer file.Close()
 
-	// init gzip library on input
-	gr, err := gzip.NewReader(file)
+	var gr io.Reader
+	// init compression library on input
+	switch c.compression {
+	case "GZIP":
+		gr, err = gzip.NewReader(file)
+	case "ZIP":
+		fi, err := file.Stat()
+		if err != nil {
+			return "", nil, err
+		}
+		size := fi.Size()
+		r, err := zip.NewReader(file, size)
+		if err != nil {
+			return "", nil, err
+		}
+		var files []io.Reader
+		for _, file := range r.File {
+			f, err := file.Open()
+			if err != nil {
+				return "", nil, err
+			}
+			files = append(files, f)
+		}
+		gr = io.MultiReader(files...)
+		err = nil
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer gr.Close()
+	// defer gr.Close()
 
 	// init csv reader
 	cr := csv.NewReader(gr)
