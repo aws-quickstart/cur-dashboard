@@ -43,6 +43,7 @@ Metadata:
         Parameters:
           - ConfigFile
           - GitBranch
+          - SQS3BinaryBucket
     ParameterLabels:
       AvailabilityZones:
         default: "Availability Zones"
@@ -84,6 +85,8 @@ Metadata:
         default: "Config file name"
       GitBranch:
         default: "Config git branch"
+      SQS3BinaryBucket:
+        default: "S3 Bucket to over-ride code binary download from"
       
 Parameters:
   CURBucket:
@@ -207,6 +210,13 @@ Parameters:
     ConstraintDescription: "Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-)."
     AllowedPattern: "^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$"
     Default: "aws-quickstart"
+  
+  SQS3BinaryBucket:
+    Type: String
+    Description: "S3 bucket name for converter binary"
+    ConstraintDescription: "Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-)."
+    AllowedPattern: "^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$"
+    Default: ""
 
 Resources:
   VPCStack:

@@ -39,6 +39,7 @@ Metadata:
         Parameters:
           - ConfigFile
           - GitBranch
+          - SQS3BinaryBucket
     ParameterLabels:
       VPCID:
         default: "Existing VPC"
@@ -72,6 +73,8 @@ Metadata:
         default: "Config file name"
       GitBranch:
         default: "Config git branch"
+      SQS3BinaryBucket:
+        default: "S3 Bucket to over-ride code binary download from"
 
 Parameters:
   CURBucket:
@@ -168,6 +171,13 @@ Parameters:
     ConstraintDescription: "Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-)."
     AllowedPattern: "^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$"
     Default: "aws-quickstart"
+    
+  SQS3BinaryBucket:
+    Type: String
+    Description: "S3 bucket name for converter binary"
+    ConstraintDescription: "Binary bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-)."
+    AllowedPattern: "^([0-9a-zA-Z-]*[0-9a-zA-Z])*$"
+    Default: ""
 
 Mappings:
   RegionMap:
@@ -198,6 +208,10 @@ Conditions:
   NoUploadBucket:
     "Fn::Equals":
       - { Ref: CURUploadBucket }
+      - ""
+  NoBinaryBucket:
+      "Fn::Equals":
+      - { Ref: SQS3BinaryBucket }
       - ""
 
 Resources:
@@ -280,10 +294,18 @@ Resources:
                     - NoUploadBucket
                     - !Ref "AWS::NoValue"
                     - !Sub 'arn:aws:s3:::${CURUploadBucket}'
+                  - !If
+                    - NoBinaryBucket
+                    - !Ref "AWS::NoValue"
+                    - !Sub 'arn:aws:s3:::${SQS3BinaryBucket}'
               - Effect: Allow
                 Action:
                   - s3:GetObject
-                Resource: !Sub 'arn:aws:s3:::${QSS3BucketName}/${QSS3KeyPrefix}*'
+                Resource: 
+                  - !If
+                    - NoBinaryBucket
+                    - !Sub 'arn:aws:s3:::${QSS3BucketName}/${QSS3KeyPrefix}*'
+                    - !Sub 'arn:aws:s3:::${SQS3BinaryBucket}/*'
               - Effect: Allow
                 Action:
                   - cloudwatch:PutMetricData
@@ -369,7 +391,10 @@ Resources:
               - "Fn::Sub": "aws s3 cp s3://${QSS3BucketName}/${QSS3KeyPrefix}scripts/analyzeCUR.config ./${ConfigFile}"
               - "Fn::Sub": "git add .; git commit -m 'Default Config File'; git push origin ${GitBranch}"
               - "fi"
-              - "Fn::Sub": "aws s3 cp s3://${QSS3BucketName}/${QSS3KeyPrefix}scripts/bin/analyzeCUR ."
+              - "Fn::If":
+                - NoBinaryBucket
+                - "Fn::Sub": "aws s3 cp s3://${QSS3BucketName}/${QSS3KeyPrefix}scripts/bin/analyzeCUR ."
+                - "Fn::Sub": "aws s3 cp s3://${SQS3BinaryBucket}/analyzeCUR ."
               - "Fn::If":
                 - NoUploadBucket
                 - "Fn::Sub": "chmod 755 ./analyzeCUR && ./analyzeCUR -bucket ${CURBucket} -reportname ${ReportName} -reportpath ${ReportPath} -account ${AWS::AccountId} -config ./${ConfigFile}"
