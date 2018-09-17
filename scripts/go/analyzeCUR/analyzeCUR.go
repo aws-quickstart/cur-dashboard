@@ -306,7 +306,11 @@ func sendMetric(svc *cloudwatch.CloudWatch, data AthenaResponse, cwNameSpace str
 		} else if interval == "daily" {
 			t, _ = time.Parse("2006-01-02", data.Rows[row]["date"])
 		} else {
-			t, _ = time.Parse("2006-01", data.Rows[row]["date"])
+			if len(data.Rows[row]["maxdate"]) > 0 {
+				t, _ = time.Parse("2006-01-02T15:04", data.Rows[row]["maxdate"])
+			} else {
+				t = time.Now()
+			}
 		}
 
 		v, _ := strconv.ParseFloat(data.Rows[row]["value"], 64)
