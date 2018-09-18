@@ -760,7 +760,8 @@ func main() {
 	_, ec2 := meta["instanceId"].(string)
 	var logger *cwlogger.Logger
 	if ec2 { // Init Cloudwatch Logger class if were running on EC2
-		logger, err := cwlogger.New(&cwlogger.Config{
+		var err error
+		logger, err = cwlogger.New(&cwlogger.Config{
 			LogGroupName: "CURdashboard",
 			Client:       cloudwatchlogs.New(sess),
 		})
