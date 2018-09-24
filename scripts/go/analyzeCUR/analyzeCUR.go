@@ -70,13 +70,18 @@ type MetricConfig struct {
 	Substring map[string]string
 }
 
+type ProcessingDays struct {
+	PreviousMonth []int `toml:"previousMonth"`
+}
+
 type Config struct {
-	General      General
-	RI           RI
-	Athena       Athena
-	MetricConfig MetricConfig
-	Metrics      []Metric
-	CurGroups    []curgroups.CurGroup
+	General        General
+	RI             RI
+	Athena         Athena
+	ProcessingDays ProcessingDays
+	MetricConfig   MetricConfig
+	Metrics        []Metric
+	CurGroups      []curgroups.CurGroup
 }
 
 type AthenaResponse struct {
@@ -600,6 +605,7 @@ func processCUR(sourceBucket string, reportName string, reportPath string, destP
 	} else {
 		t1 = time.Now()
 	}
+	doLog(logger, "Processing CUR for "+t1.Format("200601"))
 
 	t1First := time.Date(t1.Year(), t1.Month(), 1, 0, 0, 0, 0, time.Local)
 
@@ -769,7 +775,7 @@ func main() {
 			log.Fatal("Could not initalize Cloudwatch logger: " + err.Error())
 		}
 		defer logger.Close()
-		logger.Log(time.Now(), "CURDashboard running on "+meta["instanceId"].(string)+" in "+meta["availabilityZone"].(string))
+		doLog(logger, "CURDashboard running on "+meta["instanceId"].(string)+" in "+meta["availabilityZone"].(string))
 	}
 
 	// read in command line params
@@ -785,103 +791,132 @@ func main() {
 		doLog(logger, err.Error())
 	}
 
-	// convert CUR
-	columns, s3Path, curDate, err := processCUR(sourceBucket, curReportName, curReportPath, curDestPath, destBucket, logger, dateOverride, conf.CurGroups)
-	if err != nil {
-		doLog(logger, err.Error())
-	}
-
-	// initialize Athena class
-	svcAthena := athena.New(sess)
-	svcCW := cloudwatch.New(sess)
-
-	// make sure Athena DB exists - dont care about results
-	if _, err := sendQuery(svcAthena, "default", conf.Athena.DbSQL, meta["region"].(string), account); err != nil {
-		doLog(logger, "Could not create Athena Database: "+err.Error())
-	}
-
-	// make sure current Athena tables exists
-	tables := make(map[string]string)
-	tables[""] = "main"
-	for i := range conf.CurGroups {
-		tables[conf.CurGroups[i].TablePrefix] = conf.CurGroups[i].PathSuffix
-	}
-
-	for tablePrefix, pathPrefix := range tables {
-		table := conf.Athena.TablePrefix
-		if len(tablePrefix) > 0 {
-			table += "_" + tablePrefix
-		}
-		s3Path := s3Path + "/" + pathPrefix
-
-		if err := createUpdateAthenaTable(sess, svcAthena, conf, columns, s3Path, curDate, meta["region"].(string), account); err != nil {
-			doLog(logger, "Could not create Athena Table: "+err.Error())
-		}
-	}
-
-	// // If RI analysis enabled - do it
-	// if conf.RI.Enabled {
-	// 	if err := riUtilization(sess, svcAthena, conf, key, secret, meta["region"].(string), account, date); err != nil {
-	// 		doLog(logger, err.Error())
-	// 	}
-	// }
-
-	// struct for a query job
-	type job struct {
-		svc      *athena.Athena
-		db       string
-		account  string
-		region   string
-		interval string
-		metric   Metric
-	}
-
-	// channels for parallel execution
-	jobs := make(chan job)
-	done := make(chan bool)
-
-	// create upto maxConcurrentQueries workers to process metric jobs
-	for w := 0; w < maxConcurrentQueries; w++ {
-		go func() {
-			for {
-				j, ok := <-jobs
-				if !ok {
-					done <- true
-					return
+	for i := 0; i <= 1; i++ {
+		if i > 0 {
+			var processPreviousMonth bool
+			d := time.Now().Day()
+			for i := range conf.ProcessingDays.PreviousMonth {
+				if d == conf.ProcessingDays.PreviousMonth[i] {
+					processPreviousMonth = true
+					break
 				}
+			}
+			if !processPreviousMonth {
+				break
+			}
 
-				sql := substituteParams(j.metric.SQL, map[string]string{"**DBNAME**": conf.Athena.DbName, "**DATE**": curDate, "**INTERVAL**": conf.MetricConfig.Substring[j.interval]})
-				results, err := sendQuery(j.svc, j.db, sql, j.region, j.account)
+			var t time.Time
+			if len(dateOverride) == 8 {
+				var err error
+				t, err = time.Parse("20060102", dateOverride)
 				if err != nil {
-					doLog(logger, "Error querying Athena, SQL: "+sql+" , Error: "+err.Error())
-					continue
+					doLog(logger, "Could not parse data overide: "+err.Error())
+					break
 				}
+			} else {
+				t = time.Now()
+			}
+			t = t.AddDate(0, -1, 0)
+			dateOverride = t.Format("20060102")
+		}
+		// convert CUR
+		columns, s3Path, curDate, err := processCUR(sourceBucket, curReportName, curReportPath, curDestPath, destBucket, logger, dateOverride, conf.CurGroups)
+		if err != nil {
+			doLog(logger, err.Error())
+		}
 
-				if err := sendMetric(svcCW, results, conf.General.Namespace, j.metric.CwName, j.metric.CwType, j.metric.CwDimension, j.interval); err != nil {
-					doLog(logger, "Error sending metric, name: "+j.metric.CwName+" , Error: "+err.Error())
-				}
-			}
-		}()
-	}
+		// initialize Athena class
+		svcAthena := athena.New(sess)
+		svcCW := cloudwatch.New(sess)
 
-	// pass every enabled metric into channel for processing
-	for metric := range conf.Metrics {
-		if conf.Metrics[metric].Enabled {
-			if conf.Metrics[metric].Hourly {
-				jobs <- job{svcAthena, conf.Athena.DbName, account, meta["region"].(string), "hourly", conf.Metrics[metric]}
+		// make sure Athena DB exists - dont care about results
+		if _, err := sendQuery(svcAthena, "default", conf.Athena.DbSQL, meta["region"].(string), account); err != nil {
+			doLog(logger, "Could not create Athena Database: "+err.Error())
+		}
+
+		// make sure current Athena tables exists
+		tables := make(map[string]string)
+		tables[""] = "main"
+		for i := range conf.CurGroups {
+			tables[conf.CurGroups[i].TablePrefix] = conf.CurGroups[i].PathSuffix
+		}
+
+		for tablePrefix, pathPrefix := range tables {
+			table := conf.Athena.TablePrefix
+			if len(tablePrefix) > 0 {
+				table += "_" + tablePrefix
 			}
-			if conf.Metrics[metric].Daily {
-				jobs <- job{svcAthena, conf.Athena.DbName, account, meta["region"].(string), "daily", conf.Metrics[metric]}
-			}
-			if conf.Metrics[metric].Monthly {
-				jobs <- job{svcAthena, conf.Athena.DbName, account, meta["region"].(string), "monthly", conf.Metrics[metric]}
+			s3Path := s3Path + "/" + pathPrefix
+
+			if err := createUpdateAthenaTable(sess, svcAthena, conf, columns, s3Path, curDate, meta["region"].(string), account); err != nil {
+				doLog(logger, "Could not create Athena Table: "+err.Error())
 			}
 		}
-	}
-	close(jobs)
 
-	// wait for jobs to complete
-	for w := 0; w < maxConcurrentQueries; w++ {
-		<-done
-	}
+		// // If RI analysis enabled - do it
+		// if conf.RI.Enabled {
+		// 	if err := riUtilization(sess, svcAthena, conf, key, secret, meta["region"].(string), account, date); err != nil {
+		// 		doLog(logger, err.Error())
+		// 	}
+		// }
+
+		// struct for a query job
+		type job struct {
+			svc      *athena.Athena
+			db       string
+			account  string
+			region   string
+			interval string
+			metric   Metric
+		}
+
+		// channels for parallel execution
+		jobs := make(chan job)
+		done := make(chan bool)
+
+		// create upto maxConcurrentQueries workers to process metric jobs
+		for w := 0; w < maxConcurrentQueries; w++ {
+			go func() {
+				for {
+					j, ok := <-jobs
+					if !ok {
+						done <- true
+						return
+					}
+
+					sql := substituteParams(j.metric.SQL, map[string]string{"**DBNAME**": conf.Athena.DbName, "**DATE**": curDate, "**INTERVAL**": conf.MetricConfig.Substring[j.interval]})
+					results, err := sendQuery(j.svc, j.db, sql, j.region, j.account)
+					if err != nil {
+						doLog(logger, "Error querying Athena, SQL: "+sql+" , Error: "+err.Error())
+						continue
+					}
+
+					if err := sendMetric(svcCW, results, conf.General.Namespace, j.metric.CwName, j.metric.CwType, j.metric.CwDimension, j.interval); err != nil {
+						doLog(logger, "Error sending metric, name: "+j.metric.CwName+" , Error: "+err.Error())
+					}
+				}
+			}()
+		}
+
+		// pass every enabled metric into channel for processing
+		for metric := range conf.Metrics {
+			if conf.Metrics[metric].Enabled {
+				if conf.Metrics[metric].Hourly {
+					jobs <- job{svcAthena, conf.Athena.DbName, account, meta["region"].(string), "hourly", conf.Metrics[metric]}
+				}
+				if conf.Metrics[metric].Daily {
+					jobs <- job{svcAthena, conf.Athena.DbName, account, meta["region"].(string), "daily", conf.Metrics[metric]}
+				}
+				if conf.Metrics[metric].Monthly {
+					jobs <- job{svcAthena, conf.Athena.DbName, account, meta["region"].(string), "monthly", conf.Metrics[metric]}
+				}
+			}
+		}
+		close(jobs)
+
+		// wait for jobs to complete
+		for w := 0; w < maxConcurrentQueries; w++ {
+			<-done
+		}
+	} // end of for loop
 }
