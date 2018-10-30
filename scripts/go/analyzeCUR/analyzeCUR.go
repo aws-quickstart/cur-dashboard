@@ -74,6 +74,13 @@ type ProcessingDays struct {
 	PreviousMonth []int `toml:"previousMonth"`
 }
 
+type RoleConfig struct {
+	SourceARN        string
+	SourceExternalID string
+	DestARN          string
+	DestExternalID   string
+}
+
 type Config struct {
 	General        General
 	RI             RI
@@ -82,6 +89,7 @@ type Config struct {
 	MetricConfig   MetricConfig
 	Metrics        []Metric
 	CurGroups      []curgroups.CurGroup
+	RoleConfig     RoleConfig
 }
 
 type AthenaResponse struct {
@@ -593,7 +601,7 @@ func riUtilization(sess *session.Session, svcAthena *athena.Athena, conf Config,
 	return nil
 }
 
-func processCUR(sourceBucket string, reportName string, reportPath string, destPath string, destBucket string, logger *cwlogger.Logger, dateOverride string, curGroups []curgroups.CurGroup) ([]curconvert.CurColumn, string, string, error) {
+func processCUR(sourceBucket string, reportName string, reportPath string, destPath string, destBucket string, logger *cwlogger.Logger, dateOverride string, conf Config) ([]curconvert.CurColumn, string, string, error) {
 
 	var t1 time.Time
 	var err error
@@ -627,13 +635,21 @@ func processCUR(sourceBucket string, reportName string, reportPath string, destP
 	// Init CUR Converter
 	cc := curconvert.NewCurConvert(sourceBucket, manifest, destBucket, destPathFull)
 
+	// Set Source and Dest role config if required
+	if len(conf.RoleConfig.SourceARN) > 0 {
+		cc.SetSourceRole(conf.RoleConfig.SourceARN, conf.RoleConfig.SourceExternalID)
+	}
+	if len(conf.RoleConfig.DestARN) > 0 {
+		cc.SetDestRole(conf.RoleConfig.DestARN, conf.RoleConfig.DestExternalID)
+	}
+
 	// Check current months manifest exists
 	if err := cc.CheckCURExists(); err != nil {
 		if err.(awserr.Error).Code() != s3.ErrCodeNoSuchKey {
-			return nil, "", "", errors.New("Error fetching CUR Manifest: " + err.Error())
+			return nil, "", "", errors.New("Error Checking CUR Manifest: " + err.Error())
 		}
 		if t1.Day() > 3 {
-			return nil, "", "", errors.New("Error fetching CUR Manifest, NoSuchKey and too delayed: " + err.Error())
+			return nil, "", "", errors.New("Error Checking CUR Manifest, NoSuchKey and too delayed: " + err.Error())
 		}
 		// Regress to processing last months CUR. Error is ErrCodeNoSuchKey and still early in the month
 		doLog(logger, "Reseting to previous months CUR for "+reportName)
@@ -654,8 +670,8 @@ func processCUR(sourceBucket string, reportName string, reportPath string, destP
 	}
 
 	// If CurGroups exists set them
-	if len(curGroups) > 0 {
-		cc.SetCurGroups(curGroups...)
+	if len(conf.CurGroups) > 0 {
+		cc.SetCurGroups(conf.CurGroups...)
 	}
 
 	// Convert CUR
@@ -820,9 +836,10 @@ func main() {
 			dateOverride = t.Format("20060102")
 		}
 		// convert CUR
-		columns, s3Path, curDate, err := processCUR(sourceBucket, curReportName, curReportPath, curDestPath, destBucket, logger, dateOverride, conf.CurGroups)
+		columns, s3Path, curDate, err := processCUR(sourceBucket, curReportName, curReportPath, curDestPath, destBucket, logger, dateOverride, conf)
 		if err != nil {
 			doLog(logger, err.Error())
+			return
 		}
 
 		// initialize Athena class

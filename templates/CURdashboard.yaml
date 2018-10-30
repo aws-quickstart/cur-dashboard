@@ -245,6 +245,10 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - "sts:AssumeRole"
+                Resource: "*"
+              - Effect: Allow
+                Action:
                   - athena:GetQueryExecution
                   - athena:GetQueryResults
                   - athena:RunQuery
