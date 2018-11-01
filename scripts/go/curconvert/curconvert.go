@@ -64,6 +64,8 @@ type CurConvert struct {
 	skipCols       map[int]bool
 
 	curGroups []curgroups.CurGroup
+
+	awsLogLevel aws.LogLevelType
 }
 
 type matchAny struct {
@@ -113,7 +115,25 @@ func NewCurConvert(sBucket string, sObject string, dBucket string, dObject strin
 	// init parquet file map
 	cur.CurParqetFiles = make(map[string]bool)
 
+	// set Log Level through ENV
+	cur.awsLogLevel = cur.setLogLevel()
+
 	return cur
+}
+
+//
+//
+func (c *CurConvert) setLogLevel() aws.LogLevelType {
+	switch logLevel := os.Getenv("AWS_LOG_LEVEL"); logLevel {
+	case "DEBUG":
+		return aws.LogDebug
+	case "DEBUG_SIGNING":
+		return aws.LogDebugWithSigning
+	case "DEBUG_BODY":
+		return aws.LogDebugWithSigning | aws.LogDebugWithHTTPBody
+	default:
+		return aws.LogOff
+	}
 }
 
 //
@@ -248,7 +268,10 @@ func (c *CurConvert) getCreds(arn string, externalID string, sess *session.Sessi
 func (c *CurConvert) getBucketLocation(bucket string, arn string, externalID string) (string, error) {
 
 	// Init Session
-	sess, err := session.NewSession(&aws.Config{Region: aws.String("us-east-1")})
+	sess, err := session.NewSession(&aws.Config{
+		Region:   aws.String("us-east-1"),
+		LogLevel: aws.LogLevel(c.awsLogLevel),
+	})
 	if err != nil {
 		return "", err
 	}
@@ -284,7 +307,11 @@ func (c *CurConvert) initS3Downloader(bucket string, arn string, externalID stri
 	}
 
 	// Init Session
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(bucketLocation), DisableRestProtocolURICleaning: aws.Bool(true)})
+	sess, err := session.NewSession(&aws.Config{
+		DisableRestProtocolURICleaning: aws.Bool(true),
+		Region:   aws.String(bucketLocation),
+		LogLevel: aws.LogLevel(c.awsLogLevel),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +333,11 @@ func (c *CurConvert) initS3Uploader(bucket string, arn string, externalID string
 	}
 
 	// Init Session
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(bucketLocation), DisableRestProtocolURICleaning: aws.Bool(true)})
+	sess, err := session.NewSession(&aws.Config{
+		DisableRestProtocolURICleaning: aws.Bool(true),
+		Region:   aws.String(bucketLocation),
+		LogLevel: aws.LogLevel(c.awsLogLevel),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +361,11 @@ func (c *CurConvert) CheckCURExists() error {
 	}
 
 	// Init Session
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(bucketLocation), DisableRestProtocolURICleaning: aws.Bool(true)})
+	sess, err := session.NewSession(&aws.Config{
+		DisableRestProtocolURICleaning: aws.Bool(true),
+		Region:   aws.String(bucketLocation),
+		LogLevel: aws.LogLevel(c.awsLogLevel),
+	})
 	if err != nil {
 		return err
 	}
@@ -623,7 +658,11 @@ func (c *CurConvert) uploadEncryptedCUR(destObject string, file io.ReadSeeker) e
 	}
 
 	// Init Session
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(bucketLocation), DisableRestProtocolURICleaning: aws.Bool(true)})
+	sess, err := session.NewSession(&aws.Config{
+		DisableRestProtocolURICleaning: aws.Bool(true),
+		Region:   aws.String(bucketLocation),
+		LogLevel: aws.LogLevel(c.awsLogLevel),
+	})
 	if err != nil {
 		return err
 	}

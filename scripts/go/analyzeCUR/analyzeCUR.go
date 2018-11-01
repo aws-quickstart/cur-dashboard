@@ -766,6 +766,18 @@ func doLog(logger *cwlogger.Logger, m string) {
 	}
 	log.Println(m)
 }
+func setLogLevel() aws.LogLevelType {
+	switch logLevel := os.Getenv("AWS_LOG_LEVEL"); logLevel {
+	case "DEBUG":
+		return aws.LogDebug
+	case "DEBUG_SIGNING":
+		return aws.LogDebugWithSigning
+	case "DEBUG_BODY":
+		return aws.LogDebugWithSigning | aws.LogDebugWithHTTPBody
+	default:
+		return aws.LogOff
+	}
+}
 
 func main() {
 
@@ -776,7 +788,10 @@ func main() {
 	meta := getInstanceMetadata(sess)
 
 	// re-init session now we have the region we are in
-	sess = sess.Copy(&aws.Config{Region: aws.String(meta["region"].(string))})
+	sess = sess.Copy(&aws.Config{
+		Region:   aws.String(meta["region"].(string)),
+		LogLevel: aws.LogLevel(setLogLevel()),
+	})
 
 	// Check if running on EC2
 	_, ec2 := meta["instanceId"].(string)
