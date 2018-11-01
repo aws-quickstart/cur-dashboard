@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: A role that grants readonly access to a bucket and trusts another account to assume
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: The name of the bucket where CUR reports go (excluding the s3 prefix)
+
+  ReportPath:
+    Type: String
+    Description: The name of the report path for the Cost and Usage reportconfigured within the billing dashboard
+
+  TrustedAwsAccountId:
+    Type: String
+    Description: The account ID to trust
+
+  TrustedExternalID:
+    Type: String
+    Description: The external ID for the assumeRole (replace with random string)
+    Default: "cur-access"
+
+Resources:
+  CrossAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Policies:
+        - PolicyName: permit-readonly-access-to-bucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "s3:ListBucket"
+                  - "s3:GetBucketLocation"
+                Effect: Allow
+                Resource:
+                  "Fn::Join":
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - { Ref: BucketName }
+              - Action:
+                - "s3:GetObject"
+                Effect: Allow
+                Resource:
+                  "Fn::Join":
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - { Ref: BucketName }
+                      - "/"
+                      - { Ref: ReportPath }
+                      - "/*"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "sts:AssumeRole"
+            Principal:
+              AWS: { Ref: TrustedAwsAccountId }
+            Condition:
+              StringEquals:
+                sts:ExternalId: { Ref: TrustedExternalID }
+
+
+Outputs:
+  CrossAccountRoleName:
+    Value: { Ref: CrossAccountRole }
+  ExternalID:
+    Value: { Ref: TrustedExternalID }
+  CrossAccountRoleArn:
+    Value:
+      "Fn::GetAtt":
+        - CrossAccountRole
+        - Arn
